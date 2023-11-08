@@ -10,6 +10,10 @@ import torch
 from tqdm import tqdm
 
 
+def load_dict_npy_data(filename):
+    return np.load(filename, allow_pickle=True).item()
+
+
 def set_environment(seed, benchmark_flags=False):
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -92,7 +96,7 @@ class Trainer:
     def train(self, epoch):
         self.model.train()
         losses = 0
-        # 设置打印栏
+        # set print bar
         for item in tqdm(self.dataloader, total=len(self.dataloader)):
             graphs = [graph.to(self.device) for graph in item[0][0]]
             labels = item[0][1][0]
@@ -159,9 +163,6 @@ class Tester:
         )
         avg_epoch_loss = losses / (len(self.dataloader) * 31)
         return avg_epoch_loss, results
-
-
-
 
 
 def draw_curve(epochs, title, losses):

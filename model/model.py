@@ -11,11 +11,6 @@ class FlowGNN(nn.Module):
         super(FlowGNN, self).__init__()
 
 
-class CommuteGNN(nn.Module):
-    def __init__(self):
-        super(CommuteGNN, self).__init__()
-
-
 class MeGNN(nn.Module):
     def __init__(self):
         super(MeGNN, self).__init__()
