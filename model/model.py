@@ -4,13 +4,10 @@ import torch.nn as nn
 class SIRDcell(nn.Module):
     def __init__(self):
         super(SIRDcell, self).__init__()
+    
+    def forword(self, dS, dI, dR, dD):
+        pass
 
-
-class FlowGNN(nn.Module):
+class GCN(nn.Module):
     def __init__(self):
-        super(FlowGNN, self).__init__()
-
-
-class MeGNN(nn.Module):
-    def __init__(self):
-        super(MeGNN, self).__init__()
+        super(GCN, self).__init__()
