@@ -1,31 +1,34 @@
 import torch
 import torch.nn as nn
+import numpy as np
 import torch.optim as optim
 
 
 class SIRD(nn.Module):
     def __init__(self):
         super(SIRD, self).__init__()
-    
+
     def forword(self, dS, dI, dR, dD):
         pass
 
 
 class ARIMA(nn.Module):
-    def __init__(self, p, d, q):
+    def __init__(self, pred_window, hist_window, d=1, q=4):
         super(ARIMA, self).__init__()
-        self.p = p
+        self.p = hist_window
+        self.pred_window = pred_window
         self.d = d
         self.q = q
-        self.ar = nn.Linear(p, 1)
+        self.ar = nn.Linear(hist_window, 1)
         self.ma = nn.Linear(q, 1)
         self.diff = None
-    
+
     def forward(self, x):
+        x = np.transpose(x, (0, 2, 1))
         if self.diff is not None:
             x = self.difference(x)
         return self.ar(x) + self.ma(x)
-    
+
     def difference(self, x):
         if self.diff is None:
             self.diff = torch.zeros_like(x)
@@ -33,16 +36,12 @@ class ARIMA(nn.Module):
         self.diff = x
         return diffed
 
-# 示例用法
-# 创建 ARIMA 模型
-model = ARIMA(p=1, d=1, q=1)
 
-# 定义损失函数和优化器
+model = ARIMA(pred_window=12, hist_window=2, d=1, q=4)
 criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=0.01)
 
-# 准备数据
-data = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0], dtype=torch.float32).unsqueeze(1)  # 示例输入数据
+data = []
 
 # 训练模型
 for epoch in range(100):
@@ -52,9 +51,8 @@ for epoch in range(100):
     loss.backward()
     optimizer.step()
     if (epoch + 1) % 10 == 0:
-        print(f'Epoch: {epoch+1}, Loss: {loss.item()}')
+        print(f"Epoch: {epoch+1}, Loss: {loss.item()}")
 
 # 使用模型进行预测
 predictions = model(data)
-print('Predictions:', predictions.squeeze().detach().numpy())
-
+print("Predictions:", predictions.squeeze().detach().numpy())

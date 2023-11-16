@@ -1,8 +1,8 @@
+import networkx as nx
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
-import networkx as nx
 from utils import load_dict_npy_data
 
 
@@ -35,20 +35,20 @@ class CCDataset(Dataset):
             mobility_dfs.append(pd.read_csv(f"{self.data_path}state2state/daily_state2state_{date}.csv"))
         
         # preprocess data
-        dI, dR, dD, adj, result = [], [], [], [], []
+        cum_I, cum_R, cum_D, adj, result = [], [], [], [], []
         # history window
         for i in range(0, self.hist_window):
-            dI_dict = {}
-            dR_dict = {}
-            dD_dict = {}
+            cum_I_dict = {}
+            cum_R_dict = {}
+            cum_D_dict = {}
             for row in case_dfs[i].itertuples():
                 if row.Province_State in state_order:
-                    dI_dict[row.Province_State] = row.Confirmed
-                    dR_dict[row.Province_State] = row.Recovered
-                    dD_dict[row.Province_State] = row.Deaths
-            dI.append(list(dI_dict.values()))
-            dR.append(list(dR_dict.values()))
-            dD.append(list(dD_dict.values()))
+                    cum_I_dict[row.Province_State] = row.Confirmed
+                    cum_R_dict[row.Province_State] = row.Recovered
+                    cum_D_dict[row.Province_State] = row.Deaths
+            cum_I.append(list(cum_I_dict.values()))
+            cum_R.append(list(cum_R_dict.values()))
+            cum_D.append(list(cum_D_dict.values()))
 
             graph = nx.DiGraph()
             graph.add_nodes_from(fip_order)
@@ -69,21 +69,20 @@ class CCDataset(Dataset):
                     daily_confirmed[row.Province_State] = row.Confirmed
             result.append(list(daily_confirmed.values()))
 
-        return dI, dR, dD, adj, result
+        return cum_I, cum_R, cum_D, adj, result
 
     def __len__(self):
         return len(self.data_indexs)
 
     def __getitem__(self, index):
         data_index = self.data_indexs[index]
-        dI, dR, dD, adj, result = self._load_preprocess_data(data_index)
-        dI = torch.tensor(dI, dtype=torch.float32).to(self.device)
-        dR = torch.tensor(dR, dtype=torch.float32).to(self.device)
-        dD = torch.tensor(dD, dtype=torch.float32).to(self.device)
+        cum_I, cum_R, cum_D, adj, result = self._load_preprocess_data(data_index)
+        cum_I = torch.tensor(cum_I, dtype=torch.float32).to(self.device)
+        cum_R = torch.tensor(cum_R, dtype=torch.float32).to(self.device)
+        cum_D = torch.tensor(cum_D, dtype=torch.float32).to(self.device)
         adj = torch.from_numpy(np.stack(adj)).to(self.device)
         result = torch.tensor(result, dtype=torch.float32).to(self.device)
-        return dI, dR, dD, adj, result
-
+        return cum_I, cum_R, cum_D, adj, result
 
 
 
@@ -99,5 +98,6 @@ if __name__ == "__main__":
         print(dD.shape)
         print(adj.shape)
         print(result.shape)
-        print(dI[0,0,:])
+        print(dI[0,:,0])
+        print(result[0,:,0])
         break
