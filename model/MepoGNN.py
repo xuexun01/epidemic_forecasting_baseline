@@ -188,7 +188,6 @@ class SIRcell(nn.Module):
         I_t = I + I_new - I * param_g
         S_t = S - I_new
         Ht_SIR = torch.cat((I_new, S_t, I_t, R_t), dim=-1)
-
         return Ht_SIR
 
 
@@ -257,7 +256,6 @@ class StandardScaler():
 
     def inverse_transform(self, data):
         return (data * self.std) + self.mean
-
 
 
 def evaluate(y_pred: np.array, y_true: np.array):

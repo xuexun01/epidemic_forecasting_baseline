@@ -1,17 +1,9 @@
-# -*- coding: utf-8 -*-
-from __future__ import absolute_import
-from __future__ import unicode_literals
-from __future__ import division
-from __future__ import print_function
-
 import math
-import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import Parameter
 import torch.nn.functional as F
-from torch.nn.utils import weight_norm
-from torch.autograd import Variable
+
 
 from utils import *
 
@@ -64,14 +56,7 @@ class GraphLearner(nn.Module):
         return adj
 
 class ConvBranch(nn.Module):
-    def __init__(self,
-                 m,
-                 in_channels,
-                 out_channels,
-                 kernel_size,
-                 dilation_factor,
-                 hidP=1,
-                 isPool=True):
+    def __init__(self, m, in_channels, out_channels, kernel_size, dilation_factor, hidP=1, isPool=True):
         super().__init__()
         self.m = m
         self.isPool = isPool
@@ -89,6 +74,7 @@ class ConvBranch(nn.Module):
             x = self.pooling(x)
         x = x.view(batch_size, -1, self.m)
         return x
+
 
 class RegionAwareConv(nn.Module):
     def __init__(self, P, m, k, hidP, dilation_factor=2):
@@ -193,8 +179,6 @@ class EpiGNN(nn.Module):
         self.d_gate = nn.Parameter(torch.FloatTensor(self.m, self.m), requires_grad=True)
         self.graphGen = GraphLearner(self.hidR)
         self.GNNBlocks = nn.ModuleList([GraphConvLayer(in_features=self.hidR, out_features=self.hidR) for i in range(self.n)])
-        #self.GCNBlock1 = GraphConvLayer(in_features=self.hidR, out_features=self.hidR)
-        #self.GCNBlock2 = GraphConvLayer(in_features=self.hidR, out_features=self.hidR)
 
         # prediction
         if self.res == 0:
@@ -284,15 +268,6 @@ class EpiGNN(nn.Module):
             node_state = layer(node_state, laplace_adj)
             node_state = self.dropout(node_state)
             node_state_list.append(node_state)
-        '''
-        if self.res == 1:
-            node_state = torch.cat(node_state_list, dim=-1)
-        
-        node_state = self.GCNBlock1(feat_emb, laplace_adj)
-        node_state = self.dropout(node_state)
-        node_state = self.GCNBlock2(node_state, laplace_adj)
-        node_state = self.dropout(node_state)
-        '''
 
         # Final prediction
         node_state = torch.cat([node_state, feat_emb], dim=-1)
@@ -310,5 +285,4 @@ class EpiGNN(nn.Module):
             imd = (adj, attn)
         else:
             imd = None
-
         return res, imd
