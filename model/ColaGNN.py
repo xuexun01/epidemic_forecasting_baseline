@@ -6,6 +6,7 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 import scipy.sparse as sp
 
+
 def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     """Convert a scipy sparse matrix to a torch sparse tensor."""
     sparse_mx = sparse_mx.tocoo().astype(np.float32)
@@ -16,6 +17,7 @@ def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     values = torch.from_numpy(sparse_mx.data)
     shape = torch.Size(sparse_mx.shape)
     return torch.sparse.FloatTensor(indices, values, shape)
+
 
 def normalize_adj2(adj):
     """Symmetrically normalize adjacency matrix."""

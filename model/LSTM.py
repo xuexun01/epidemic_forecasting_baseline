@@ -1,97 +1,92 @@
-import pandas as pd
+import argparse
 import numpy as np
-import torch
-import torch.nn as nn
+import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-import torch.nn.functional as F
+from keras.models import Sequential, Model
+from keras.layers import LSTM, Dense, Attention, Input
 from sklearn.preprocessing import MinMaxScaler
-from utils import set_environment
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--epochs", type=int, default=100)
+parser.add_argument("--batch_size", type=int, default=32)
+parser.add_argument("--learn_rate", type=float, default=0.001)
+parser.add_argument("--model", type=str, default="lstm")
+parser.add_argument("--hidden_size", type=int, default=50)
+parser.add_argument("--hist_window", type=int, default=10)
+parser.add_argument("--pred_window", type=int, default=1)
+args = parser.parse_args()
 
 
 def get_data(dates, data_path, state):
     cases = []
     for date in dates:
         df = pd.read_csv(f"{data_path}covid_19_daily_reports_us/{date}.csv")
-        cases.append(
-            df.loc[df["Province_State"] == state, "Confirmed"].values[0]
-        )
+        cases.append(df.loc[df["Province_State"] == state, "Confirmed"].values[0])
     return np.array(cases)
 
 
-def preprocess_data(raw_data, hist_window, pred_window):
-    data = []
-    result = []
-    for i in range(0, len(raw_data) - hist_window - pred_window + 1):
-        data.append(raw_data[i : i + hist_window])
-        result.append(raw_data[i + hist_window : i + hist_window + pred_window])
-    return data, result
+def create_time_series(data, hist_window, pred_window):
+    X, y = [], []
+    for i in range(len(data) - hist_window - pred_window + 1):
+        X.append(data[i:i+hist_window, 0])
+        y.append(data[i+hist_window: i+hist_window+pred_window, 0])
+    return np.array(X), np.array(y)
 
 
-class LSTM(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
-        super(LSTM, self).__init__()
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, dropout=0.5)
-        self.fc = nn.Linear(hidden_dim, output_dim)
+dates = pd.date_range(start="2020-04-12", end="2021-10-12")
+dates = list(dates.strftime("%Y_%m_%d"))
+raw_data = get_data(dates, "./data/", state="Alabama")
+scaler = MinMaxScaler(feature_range=(0, 1))
+data_scaled = scaler.fit_transform(raw_data.reshape(-1, 1))
 
-    def forward(self, x):
-        if len(x.shape) == 2:
-            x = x.unsqueeze(-1)
-        lstm_output, _ = self.lstm(x)
-        output = self.fc(lstm_output[:, -1, :])
-        output = F.relu(output)
-        return output
+train_size = int(len(data_scaled) * 0.8)
+test_size = len(data_scaled) - train_size
+train_data = data_scaled[:train_size, :]
+test_data = data_scaled[train_size:, :]
 
+X_train, y_train = create_time_series(train_data, args.hist_window, args.pred_window)
+X_test, y_test = create_time_series(test_data, args.hist_window, args.pred_window)
 
-class LSTM_attn(nn.Module):
-    def __init__(self, hist_window, pred_window, hidden_dim, num_layers):
-        super(LSTM_attn, self).__init__()
-        self.lstm = nn.LSTM(hist_window, hidden_dim, num_layers)
-        self.attn = nn.MultiheadAttention(hidden_dim, num_heads=1)
-        self.fc = nn.Linear(hidden_dim, pred_window)
+X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
+X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
 
-    def forward(self, x):
-        x = x.permute(0, 2, 1).unsqueeze(0)
-        lstm_output, _ = self.lstm(x)
-        attention_weights = self.attn(lstm_output)
-        context_vector = torch.sum(attention_weights * lstm_output, dim=1)
-        output = self.fc(context_vector)
-        return output
+if args.model == "lstm":
+    model = Sequential()
+    model.add(LSTM(args.hidden_size, activation='relu', input_shape=(args.hist_window, 1)))
+    model.add(Dense(args.pred_window))
+    model.compile(optimizer='adam', loss='mean_squared_error')
+else:
+    input_layer = Input(shape=(args.hist_window, 1))
+    lstm1 = LSTM(args.hidden_size, activation='relu', return_sequences=True)(input_layer)
+    attention = Attention()([lstm1, lstm1])
+    lstm2 = LSTM(args.hidden_size, activation='relu', return_sequences=True)(attention)
+    attention2 = Attention()([lstm2, lstm2])
+    lstm3 = LSTM(args.hidden_size, activation='relu')(attention2)
+    output_layer = Dense(args.pred_window, activation='sigmoid', name='output')(lstm3)
+    model = Model(inputs=input_layer, outputs=output_layer)
+    model.compile(optimizer='adam', loss='mean_squared_error')
 
+# train
+model.fit(X_train, y_train, epochs=args.epochs, batch_size=args.batch_size)
 
-if __name__ == "__main__":
-    epochs = 100
-    learn_rate = 0.001
-    hist_window = 4
-    pred_window = 1
+# test the model
+train_predict = model.predict(X_train)
+test_predict = model.predict(X_test)
 
-    set_environment(seed=115327)
-    dates = pd.date_range(start="2020-04-12", end="2021-10-12")
-    dates = list(dates.strftime("%Y_%m_%d"))
-    raw_data = get_data(dates, "./data/", state="Alabama")
-    sns.lineplot(x=[x for x in range(1,len(raw_data)+1)], y=raw_data)
-    # scaler = MinMaxScaler(feature_range=(0, 1))
-    # raw_data = scaler.fit_transform(raw_data.reshape(-1, 1))
+train_predict = scaler.inverse_transform(train_predict)
+y_train = scaler.inverse_transform(y_train)
+test_predict = scaler.inverse_transform(test_predict)
+y_test = scaler.inverse_transform(y_test)
 
-    data, result = preprocess_data(raw_data, hist_window, pred_window)
-    data = torch.tensor(data, dtype=torch.float32)
-    result = torch.tensor(result, dtype=torch.float32)
+# calculate RMSE
+train_rmse = np.sqrt(np.mean((train_predict - y_train)**2))
+test_rmse = np.sqrt(np.mean((test_predict - y_test)**2))
 
-    model = LSTM(input_dim=1, hidden_dim=64, output_dim=pred_window, num_layers=2)
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learn_rate)
+print('Train RMSE:', train_rmse)
+print('Test RMSE:', test_rmse)
 
-    for epoch in range(epochs):
-        model.train()
-        prediction = model(data)
-        loss = criterion(prediction, result.unsqueeze(-1))
-        loss.backward()
-        optimizer.zero_grad()
-        optimizer.step()
-        print("Epoch: {:03d} | Train Loss: {:.10f} | lr = {:.6f}".format(epoch + 1, loss.item(), learn_rate))
-    
-    # prediction = scaler.inverse_transform(prediction.detach().numpy())
-    # prediction = prediction.flatten().tolist()
-    prediction = prediction.detach().numpy().flatten().tolist()
-    sns.lineplot(x=[x+hist_window+1 for x in range(len(prediction))], y=prediction)
-    plt.show()
+predict = test_predict[:,-1]
+sns.lineplot(x=[x for x in range(1,len(raw_data)+1)], y=raw_data)
+sns.lineplot(x=[x+args.hist_window+train_size for x in range(len(predict))], y=predict)
+plt.show()
