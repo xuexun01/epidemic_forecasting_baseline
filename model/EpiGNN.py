@@ -5,9 +5,6 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 
 
-from utils import *
-
-
 class GraphConvLayer(nn.Module):
     def __init__(self, in_features, out_features, bias=True):
         super(GraphConvLayer, self).__init__()
@@ -75,7 +72,6 @@ class ConvBranch(nn.Module):
         x = x.view(batch_size, -1, self.m)
         return x
 
-
 class RegionAwareConv(nn.Module):
     def __init__(self, P, m, k, hidP, dilation_factor=2):
         super(RegionAwareConv, self).__init__()
@@ -92,7 +88,6 @@ class RegionAwareConv(nn.Module):
     
     def forward(self, x):
         x = x.view(-1, 1, self.P, self.m)
-        batch_size = x.shape[0]
         # local pattern
         x_l1 = self.conv_l1(x)
         x_l2 = self.conv_l2(x)
@@ -131,36 +126,32 @@ def getLaplaceMat(batch_size, m, adj):
 
 
 class EpiGNN(nn.Module):
-    def __init__(self, args, data):
+    def __init__(self, n_nodes, hist_window, pred_window, n_layer, dropout, hidden_R, hidden_A, hidden_P, n_kernel, n_layer_GCN, kernel_size, residual, extra, highway, origin_adj, adj):
         super().__init__()
-        # arguments setting
-        self.adj = data.adj
-        self.m = data.m
-        self.w = args.window
-        self.n_layer = args.n_layer
-        self.droprate = args.dropout
-        self.hidR = args.hidR
-        self.hidA = args.hidA
-        self.hidP = args.hidP
-        self.k = args.k
-        self.s = args.s
-        self.n = args.n
-        self.res = args.res
-        self.hw = args.hw
-        self.dropout = nn.Dropout(self.droprate)
+        self.n_nodes = n_nodes
+        self.hist_window = hist_window
+        self.n_layer = n_layer
+        self.hidR = hidden_R
+        self.hidA = hidden_A
+        self.hidP = hidden_P
+        self.n_kernel = n_kernel
+        self.kernel_size = kernel_size
+        self.n_layer_GCN = n_layer_GCN
+        self.residual = residual
+        self.hw = highway
+        self.dropout = nn.Dropout(dropout)
+        self.adj = adj
 
         if self.hw > 0:
             self.highway = nn.Linear(self.hw, 1)
-
-        if args.extra:
+        if extra:
             self.extra = True
-            self.external = data.external
         else:
             self.extra = False
 
         # Feature embedding
-        self.hidR = self.k*4*self.hidP + self.k
-        self.backbone = RegionAwareConv(P=self.w, m=self.m, k=self.k, hidP=self.hidP)
+        self.hidR = self.n_kernel*4*self.hidP + self.n_kernel
+        self.backbone = RegionAwareConv(P=self.hist_window, m=self.n_nodes, k=self.n_kernel, hidP=self.hidP)
 
         # global
         self.WQ = nn.Linear(self.hidR, self.hidA)
@@ -169,25 +160,25 @@ class EpiGNN(nn.Module):
         self.t_enc = nn.Linear(1, self.hidR)
 
         # local
-        self.degree = data.degree_adj
+        self.degree = torch.sum(origin_adj, dim=-1)
         self.s_enc = nn.Linear(1, self.hidR)
 
         # external resources
-        self.external_parameter = nn.Parameter(torch.FloatTensor(self.m, self.m), requires_grad=True)
+        self.external_parameter = nn.Parameter(torch.FloatTensor(self.n_nodes, self.n_nodes), requires_grad=True)
 
         # Graph Generator and GCN
-        self.d_gate = nn.Parameter(torch.FloatTensor(self.m, self.m), requires_grad=True)
+        self.d_gate = nn.Parameter(torch.FloatTensor(self.n_nodes, self.n_nodes), requires_grad=True)
         self.graphGen = GraphLearner(self.hidR)
-        self.GNNBlocks = nn.ModuleList([GraphConvLayer(in_features=self.hidR, out_features=self.hidR) for i in range(self.n)])
+        self.GNNBlocks = nn.ModuleList([GraphConvLayer(in_features=self.hidR, out_features=self.hidR) for i in range(self.n_layer_GCN)])
 
         # prediction
-        if self.res == 0:
-            self.output = nn.Linear(self.hidR*2, 1)
+        if self.residual == 0:
+            self.output = nn.Linear(self.hidR*2, pred_window)
         else:
-            self.output = nn.Linear(self.hidR*(self.n+1), 1)
-
+            self.output = nn.Linear(self.hidR*(self.n_layer_GCN+1), pred_window)
         self.init_weights()
      
+
     def init_weights(self):
         for p in self.parameters():
             if p.data.ndimension() >= 2:
@@ -196,12 +187,12 @@ class EpiGNN(nn.Module):
                 stdv = 1. / math.sqrt(p.size(0))
                 p.data.uniform_(-stdv, stdv)
     
-    def forward(self, x, index, isEval=False):
-        #print(index.shape) batch_size
-        batch_size = x.shape[0] # batchsize, w, m
+
+    def forward(self, inputs, isEval=False):
+        batch_size = inputs.shape[0] # batchsize, w, m
 
         # step 1: Use multi-scale convolution to extract feature embedding (SEFNet => RAConv).
-        temp_emb = self.backbone(x)
+        temp_emb = self.backbone(inputs)
 
         # step 2: generate global transmission risk encoding.
         query = self.WQ(temp_emb) # batch, N, hidden
@@ -226,25 +217,6 @@ class EpiGNN(nn.Module):
         feat_emb = temp_emb + t_enc + s_enc
 
         # step 4: Region-Aware Graph Learner
-        # load external resource
-        if self.extra:
-            extra_adj_list=[]
-            zeros_mt = torch.zeros((self.m, self.m)).to(self.adj.device)
-            #print(self.external.shape)
-            for i in range(batch_size):
-                offset = 20
-                if i-offset>=0:
-                    idx = i-offset
-                    extra_adj_list.append(self.external[index[i],:,:].unsqueeze(0))
-                else:
-                    extra_adj_list.append(zeros_mt.unsqueeze(0))
-            extra_info = torch.concat(extra_adj_list, dim=0) # [1872, 52]
-            extra_info = extra_info
-            #print(extra_info.shape) # batch_size, self.m self.m
-            external_info = torch.mul(self.external_parameter, extra_info)
-            external_info = F.relu(external_info)
-            #print(self.external_parameter)
-
         # apply Graph Learner to generate a graph
         d_mat = torch.mm(d, d.permute(1, 0))
         d_mat = torch.mul(self.d_gate, d_mat)
@@ -253,13 +225,10 @@ class EpiGNN(nn.Module):
         adj = self.graphGen(temp_emb)
         
         # if additional information => fusion
-        if self.extra:
-            adj = adj + spatial_adj + external_info
-        else:
-            adj = adj + spatial_adj
+        adj = adj + spatial_adj
 
         # get laplace adjacent matrix
-        laplace_adj = getLaplaceMat(batch_size, self.m, adj)
+        laplace_adj = getLaplaceMat(batch_size, self.n_nodes, adj)
         
         # Graph Convolution Network
         node_state = feat_emb
@@ -274,10 +243,10 @@ class EpiGNN(nn.Module):
         res = self.output(node_state).squeeze(2)
         # highway means autoregressive model
         if self.hw > 0:
-            z = x[:, -self.hw:, :]
+            z = inputs[:, -self.hw:, :]
             z = z.permute(0, 2, 1).contiguous().view(-1, self.hw)
             z = self.highway(z)
-            z = z.view(-1, self.m)
+            z = z.view(-1, self.n_nodes)
             res = res + z
         
         # if evaluation, return some intermediate results

@@ -4,6 +4,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
 from utils import load_dict_npy_data
+from torch.autograd import Variable
 
 
 class CCDataset(Dataset):
@@ -77,13 +78,14 @@ class CCDataset(Dataset):
             daily_confirmed = {}
             for row in case_dfs[i].itertuples():
                 if row.Province_State in state_order:
-                    daily_confirmed[row.Province_State] = row.Confirmed
+                    daily_confirmed[row.Province_State] = row.Confirmed - row.Recovered - row.Deaths
             y_true.append(list(daily_confirmed.values()))
-
         return N, S, I, R, D, mob, y_true
+
 
     def __len__(self):
         return len(self.data_indexs)
+
 
     def __getitem__(self, index):
         data_index = self.data_indexs[index]
@@ -98,20 +100,90 @@ class CCDataset(Dataset):
         return N, S, I, R, D, mob, y_true
 
 
+class MyDataset(Dataset):
+    def __init__(self, hist_window, pred_window, data_path, dates, device):
+        self.device = device
+        self.data_path = data_path
+        self.hist_window = hist_window
+        self.pred_window = pred_window
+        self.dates = dates
+        self.data_indexs = self._get_data()
+        self.origin_adj, self.adj = self.get_adj()
+    
+    def get_adj(self):
+        origin_adj = torch.Tensor(np.loadtxt(open(f"{self.data_path}state_adj.txt"), delimiter=',')).to(self.device)
+        adj = Variable(origin_adj)
+        return origin_adj, adj
+    
+    def _get_data(self):
+        data_indexs = []
+        for i in range(0, len(self.dates)-self.hist_window-self.pred_window+1):
+            data_indexs.append(self.dates[i:i+self.hist_window+self.pred_window])
+        return data_indexs
+    
+    def _load_preprocess_data(self, data_index):
+        state2fip = load_dict_npy_data(f"{self.data_path}state2fip.npy")
+        state_order = list(state2fip.keys())
+        
+        # load raw data
+        case_dfs = []
+        mobility_dfs = []
+        for date in data_index:
+            case_dfs.append(pd.read_csv(f"{self.data_path}covid_19_daily_reports_us/{date}.csv").fillna(0))
+            mobility_dfs.append(pd.read_csv(f"{self.data_path}state2state/daily_state2state_{date}.csv"))
+        
+        # preprocess data
+        confirmed = []
+        y_true = []
+        # history window
+        for i in range(0, self.hist_window):
+            i_dict = {}
+            for row in case_dfs[i].itertuples():
+                if row.Province_State in state_order:
+                    i_dict[row.Province_State] = row.Confirmed
+            confirmed.append(list(i_dict.values()))
+        
+        # prediction window
+        for i in range(self.hist_window, self.hist_window+self.pred_window):
+            cum_confirmed = {}
+            for row in case_dfs[i].itertuples():
+                if row.Province_State in state_order:
+                    cum_confirmed[row.Province_State] = row.Confirmed
+            y_true.append(list(cum_confirmed.values()))
+        return confirmed, y_true
+
+    def __len__(self):
+        return len(self.data_indexs)
+
+    def __getitem__(self, index):
+        data_index = self.data_indexs[index]
+        confirmed, y_true = self._load_preprocess_data(data_index)
+        confirmed = torch.tensor(confirmed, dtype=torch.float32).to(self.device)
+        y_true = torch.tensor(y_true, dtype=torch.float32).to(self.device)
+        return confirmed, y_true
+
+
 if __name__ == "__main__":
 
     dates = pd.date_range(start="2020-04-12", end="2021-04-12")
     dates = list(dates.strftime("%Y_%m_%d"))
-    mydataset = CCDataset(14, 14, "./data/", dates, device="cuda:0")
-    myloader = DataLoader(mydataset, batch_size=32, shuffle=False)
-    for S, I, R, D, mob, y_true in myloader:
-        print(S.shape)
-        print(I.shape)
-        print(R.shape)
-        print(D.shape)
-        print(mob.shape)
+    # mydataset = CCDataset(14, 14, "./data/", dates, device="cuda:0")
+    # myloader = DataLoader(mydataset, batch_size=32, shuffle=False)
+    # for N, S, I, R, D, mob, y_true in myloader:
+    #     print(S.shape)
+    #     print(I.shape)
+    #     print(R.shape)
+    #     print(D.shape)
+    #     print(mob.shape)
+    #     print(y_true.shape)
+    #     break
+    #     if torch.any(dR == 0):
+    #         print("dR中存在0")
+    #         print(torch.sum(torch.eq(dR, 0)))
+    
+    dataset = MyDataset(14, 14, "./data/", dates, device="cuda:0")
+    loader = DataLoader(dataset, batch_size=32, shuffle=False)
+    for confirmed, y_true in loader:
+        print(confirmed.shape)
         print(y_true.shape)
         break
-        # if torch.any(dR == 0):
-        #     print("dR中存在0")
-        #     print(torch.sum(torch.eq(dR, 0)))
