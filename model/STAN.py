@@ -7,7 +7,7 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
 from datetime import datetime
-
+from sklearn.metrics import mean_squared_error
 
 class GATLayer(nn.Module):
     def __init__(self, g, in_dim, out_dim):
@@ -159,7 +159,6 @@ class STAN(nn.Module):
         return new_I, new_R, phy_I, phy_R, h
 
 
-    
 
 # 引力定律相关性
 def gravity_law_commute_dist(lat1, lng1, pop1, lat2, lng2, pop2, r=1):
@@ -209,6 +208,9 @@ def prepare_data(data, sum_I, sum_R, history_window=5, pred_window=15, slide_ste
     y_R = np.array(y_R, dtype=np.float32).transpose((1, 0, 2))
     return x, last_I, last_R, concat_I, concat_R, y_I, y_R
 
+
+
+##########################################################################################################
 
 data_path = "./data/"
 pop_data = pd.read_csv(f"{data_path}state_info.csv")
@@ -519,6 +521,13 @@ def get_real_y(data, history_window=5, pred_window=15, slide_step=5):
 
 
 I_true = get_real_y(active_cases[:], history_window, pred_window, slide_step)
+
+rmse = np.sqrt(mean_squared_error(pred_I, I_true))
+mae = np.mean(np.abs(pred_I - I_true))
+mape = np.mean(np.abs((pred_I - I_true) / I_true))
+print("[Test loss] RMSE: {} \t MAE: {} \t MAPE: {}".format(rmse, mae, mape))
+
+
 plt.plot(I_true[cur_loc, -1, :], c="r", label="Ground truth")
 plt.plot(pred_I[-1, :], c="b", label="Prediction")
 plt.legend()

@@ -4,6 +4,14 @@ import torch.nn as nn
 from torch.nn import Parameter
 import torch.nn.functional as F
 
+import argparse
+import random
+import numpy as np
+import pandas as pd
+from dataloader import USState, JapanPrefecture
+from torch.utils.data import DataLoader
+from utils import *
+
 
 class GraphConvLayer(nn.Module):
     def __init__(self, in_features, out_features, bias=True):
@@ -126,7 +134,7 @@ def getLaplaceMat(batch_size, m, adj):
 
 
 class EpiGNN(nn.Module):
-    def __init__(self, n_nodes, hist_window, pred_window, n_layer, dropout, hidden_R, hidden_A, hidden_P, n_kernel, n_layer_GCN, kernel_size, residual, extra, highway, origin_adj, adj):
+    def __init__(self, n_nodes, hist_window, pred_window, n_layer, dropout, hidden_R, hidden_A, hidden_P, n_kernel, n_layer_GCN, kernel_size, residual, highway, origin_adj, adj):
         super().__init__()
         self.n_nodes = n_nodes
         self.hist_window = hist_window
@@ -143,11 +151,7 @@ class EpiGNN(nn.Module):
         self.adj = adj
 
         if self.hw > 0:
-            self.highway = nn.Linear(self.hw, 1)
-        if extra:
-            self.extra = True
-        else:
-            self.extra = False
+            self.highway = nn.Linear(self.hw, pred_window)
 
         # Feature embedding
         self.hidR = self.n_kernel*4*self.hidP + self.n_kernel
@@ -246,7 +250,7 @@ class EpiGNN(nn.Module):
             z = inputs[:, -self.hw:, :]
             z = z.permute(0, 2, 1).contiguous().view(-1, self.hw)
             z = self.highway(z)
-            z = z.view(-1, self.n_nodes)
+            z = z.view(batch_size, self.n_nodes, -1)
             res = res + z
         
         # if evaluation, return some intermediate results
@@ -255,3 +259,123 @@ class EpiGNN(nn.Module):
         else:
             imd = None
         return res, imd
+
+
+
+arg = argparse.ArgumentParser()
+arg.add_argument('--n_layer', type=int, default=1, help="number of layers (default 1)") 
+arg.add_argument('--n_hidden', type=int, default=32, help="rnn hidden states (could be set as any value)")
+arg.add_argument('--seed', type=int, default=3407, help='random seed')
+arg.add_argument('--epochs', type=int, default=300, help='number of epochs to train')
+arg.add_argument('--lr', type=float, default=1e-3, help='initial learning rate')
+arg.add_argument('--weight_decay', type=float, default=1e-5, help='weight decay (L2 loss on parameters).')
+arg.add_argument('--dropout', type=float, default=0.1, help='dropout rate usually 0.2-0.5.')
+arg.add_argument('--batch_size', type=int, default=64, help="batch size")
+arg.add_argument('--train_set_prop', type=float, default=.7, help="Training set proportion (0, 1)")
+arg.add_argument('--vaild_set_prop', type=float, default=.1, help="Training set proportion (0, 1)")
+arg.add_argument('--hist_len', type=int, default=14, help='')
+arg.add_argument('--pred_len', type=int, default=14, help='leadtime default 5')
+arg.add_argument('--save_dir', type=str,  default='./pt/epignn.pt',help='dir path to save the final model')
+arg.add_argument('--lamda', type=float, default=0.01,  help='regularize params similarities of states')
+arg.add_argument('--patience', type=int, default=100, help='patience default 100')
+arg.add_argument('--n_kernel', type=int, default=10,  help='kernels')
+arg.add_argument('--hidden_R', type=int, default=32,  help='hidden dim')
+arg.add_argument('--hidden_A', type=int, default=32,  help='hidden dim of attention layer')
+arg.add_argument('--hidden_P', type=int, default=1,  help='hidden dim of adaptive pooling')
+arg.add_argument('--highway', type=int, default=1,  help='highway')
+arg.add_argument('--n_layer_GCN', type=int, default=1, help='layer number of GCN')
+arg.add_argument('--residual', type=int, default=0, help='0 means no residual link while 1 means need residual link')
+arg.add_argument('--kernel_size', type=int, default=2, help='kernel size of temporal convolution network')
+arg.add_argument('--dataset', type=str,  default='japan')
+args = arg.parse_args()
+
+
+set_environment(args.seed)
+device = "cuda:0" if torch.cuda.is_available() else "cpu"
+
+
+if args.dataset == "us":
+    dates = pd.date_range(start="2020-04-12", end="2021-04-15")
+    dates = list(dates.strftime("%Y_%m_%d"))
+
+    train_dates = dates[:round(len(dates)*args.train_set_prop)]
+    vaild_dates = dates[round(len(dates)*args.train_set_prop):round(len(dates)*(args.train_set_prop+args.vaild_set_prop))]
+    test_dates = dates[round(len(dates)*(args.train_set_prop+args.vaild_set_prop)):]
+
+    train_set = USState(args.hist_len, args.pred_len, data_path="./data/", dates=train_dates, device=device)
+    train_loader = DataLoader(train_set, args.batch_size, shuffle=False)
+    valid_set = USState(args.hist_len, args.pred_len, data_path="./data/", dates=vaild_dates, device=device)
+    valid_loader = DataLoader(valid_set, args.batch_size, shuffle=False)
+    test_set = USState(args.hist_len, args.pred_len, data_path="./data/", dates=test_dates, device=device)
+    test_loader = DataLoader(test_set, args.batch_size, shuffle=False)
+else:
+    train_set = JapanPrefecture(args.hist_len, args.pred_len, data_path="./data/", device=device, train_ratio=args.train_set_prop, valid_ratio=args.vaild_set_prop, mode='train')
+    train_loader = DataLoader(train_set, args.batch_size, shuffle=False)
+    valid_set = JapanPrefecture(args.hist_len, args.pred_len, data_path="./data/", device=device, train_ratio=args.train_set_prop, valid_ratio=args.vaild_set_prop, mode='valid')
+    valid_loader = DataLoader(valid_set, args.batch_size, shuffle=False)
+    test_set = JapanPrefecture(args.hist_len, args.pred_len, data_path="./data/", device=device, train_ratio=args.train_set_prop, valid_ratio=args.vaild_set_prop, mode='test')
+    test_loader = DataLoader(test_set, args.batch_size, shuffle=False)
+
+
+origin_adj = train_set.origin_adj
+adj = train_set.adj
+inputs, _ = next(iter(train_loader))
+n_nodes = inputs.shape[2]
+
+model = EpiGNN(n_nodes=n_nodes, hist_window=args.hist_len, pred_window=args.pred_len, n_layer=args.n_layer, dropout=args.dropout, hidden_R=args.hidden_R, hidden_A=args.hidden_R, hidden_P=args.hidden_P, 
+               n_kernel=args.n_kernel, n_layer_GCN=args.n_layer_GCN, kernel_size=args.kernel_size, residual=args.residual, highway=args.highway, origin_adj=origin_adj, adj=adj).to(device)
+optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr, weight_decay=args.weight_decay)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.8)
+
+
+best_loss = np.Inf
+for epoch in range(args.epochs):
+    model.train()
+    train_loss = 0.
+    valid_loss = 0.
+    model.zero_grad()
+    optimizer.zero_grad()
+    # train
+    for inputs, labels in train_loader:
+        labels = torch.transpose(labels, 1, 2)
+        preds, _ = model(inputs)
+        loss_train = masked_mae(preds, labels)
+        train_loss += loss_train.item()
+        loss_train.backward()
+        optimizer.step()
+    scheduler.step()
+
+    model.eval()
+    for inputs, labels in valid_loader:
+        labels = torch.transpose(labels, 1, 2)
+        preds, _ = model(inputs)
+        loss_valid = masked_mae(preds, labels)
+        valid_loss += loss_valid.item()
+
+    if valid_loss < best_loss:
+        best_loss = valid_loss
+        save_checkpoints(model, optimizer, epoch, args.save_dir)
+    print("Epoch: {:03d} | Train Loss {:.3f} | Valid Loss {:.3f} | lr = {:.10f}".format(epoch+1, train_loss, valid_loss, optimizer.param_groups[0]['lr']))
+
+
+# test
+test_model = EpiGNN(n_nodes=n_nodes, hist_window=args.hist_len, pred_window=args.pred_len, n_layer=args.n_layer, dropout=args.dropout, hidden_R=args.hidden_R, hidden_A=args.hidden_R, hidden_P=args.hidden_P, 
+               n_kernel=args.n_kernel, n_layer_GCN=args.n_layer_GCN, kernel_size=args.kernel_size, residual=args.residual, highway=args.highway, origin_adj=origin_adj, adj=adj).to(device)
+load_checkpoints(args.save_dir, test_model, optimizer)
+
+
+test_model.eval()
+mae, mape, rmse = 0., 0., 0.
+for inputs, labels in test_loader:
+    labels = torch.transpose(labels, 1, 2)
+    preds, _ = test_model(inputs)
+    mae_loss, mape_loss, rmse_loss = metric(preds, labels)
+    mae += mae_loss
+    mape += mape_loss
+    rmse += rmse_loss
+
+mae /= len(test_loader)
+mape /= len(test_loader)
+rmse /= len(test_loader)
+
+print(f"[Test loss] RMSE: {rmse} \t MAE: {mae} \t MAPE: {mape}")

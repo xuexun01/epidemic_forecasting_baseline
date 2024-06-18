@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from model.dataload import CCDataset
+from dataloader import CCDataset
 from torch import nn, optim
 from torch.utils.data import DataLoader
 from utils import *
